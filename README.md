@@ -1,6 +1,6 @@
 # SA Case 2 – Logging Worker
 
-Camunda External Task Worker, der Versandentscheidungen aus einem BPMN-Prozess entgegennimmt und in einer Datenbank protokolliert.
+Camunda External Task Worker, der Versandentscheidungen aus einem BPMN-Prozess entgegennimmt und in einer H2 In-Memory-Datenbank protokolliert.
 
 ---
 
@@ -40,7 +40,6 @@ Camunda Engine (BPMN-Prozess)
 ┌──────────────────────────────────────────────────────┐
 │  MySQLClient                                         │
 │  - INSERT via PreparedStatement (SQL-Injection-safe) │
-│  - SELECT via PreparedStatement (findByBestellnr.)   │
 │  - Null-Handling: setNull() für nullable Felder      │
 └──────────────┬───────────────────────────────────────┘
                │
@@ -48,8 +47,8 @@ Camunda Engine (BPMN-Prozess)
 ┌──────────────────────────────────────────────────────┐
 │  MySQLDatabase                                       │
 │  - Stellt JDBC-Connection bereit                     │
-│  - Erstellt Tabelle automatisch (initTable)          │
-│  - Aktuell: H2 In-Memory (temporär)                 │
+│  - Erstellt Tabelle "logTable" automatisch (initTable)│
+│  - Aktuell: H2 In-Memory                            │
 │  - Später: MySQL (wenn DB freigeschalten)            │
 └──────────────────────────────────────────────────────┘
 ```
@@ -74,7 +73,7 @@ src/main/java/com/fhnw/sa_case2_loggingworker/
 │   └── Decision.java                     # Datenmodell für eine Versandentscheidung
 │
 ├── DatabaseClient/
-│   └── MySQLClient.java                  # INSERT/SELECT mit PreparedStatements
+│   └── MySQLClient.java                  # INSERT mit PreparedStatements
 │
 └── Database/
     └── MySQLDatabase.java                # JDBC-Connection + Tabellen-Initialisierung
@@ -91,13 +90,13 @@ src/main/java/com/fhnw/sa_case2_loggingworker/
 Der Haupt-Einstiegspunkt. Wird über `main()` gestartet und macht drei Dinge:
 
 1. **H2 Web-Konsole starten** auf Port 8083 – damit Einträge im Browser geprüft werden können
-2. **Camunda ExternalTaskClient** erstellen – verbindet sich mit der Camunda Engine
+2. **Camunda ExternalTaskClient** erstellen – verbindet sich mit der Camunda Engine (`http://192.168.111.3:8080/engine-rest`)
 3. **Topic subscriben** – hört auf `"loggingDecision"` und leitet eingehende Tasks an den Handler weiter
 
 ```
 LoggingWorker.main()
   ├── H2 Web-Konsole (Port 8083)
-  ├── MySQLClient → MySQLDatabase → DB-Connection + Tabelle
+  ├── MySQLClient → MySQLDatabase → DB-Connection + Tabelle "logTable"
   ├── LoggingService(MySQLClient)
   └── client.subscribe("loggingDecision") → LoggingExternalTaskHandler
 ```
@@ -112,7 +111,7 @@ Implementiert `ExternalTaskHandler` von Camunda. Wird für jeden eingehenden Tas
 
 **Was passiert:**
 1. Liest Prozessvariablen aus dem `ExternalTask` (z.B. `orderId`, `carrier`, `weight`)
-2. Null-sichere Konvertierung mit `Objects.toString()` für Enum-Felder (`reason`, `country`)
+2. Null-sichere Konvertierung mit `Objects.toString()` für Enum-Felder (`reason`, `country`, `userId`)
 3. Befüllt eine `HashMap<String, Object>` mit allen Werten
 4. Ruft `LoggingService.dataPreparation()` auf
 5. Bei Erfolg: `externalTaskService.complete()` → Task in Camunda abschliessen
@@ -168,16 +167,18 @@ Einfaches Data Transfer Object mit Gettern/Settern. Repräsentiert eine Versande
 
 | Feld | Typ | DB-Spalte | Nullable? |
 |---|---|---|---|
-| `ruleId` | `Integer` | `rule_id` | ✅ |
-| `benutzerId` | `String` | `benutzer_id` | ✅ |
-| `grund` | `String` | `grund` | ✅ |
-| `bestellnummer` | `String` | `bestellnummer` (PK) | ❌ |
-| `lieferadresse` | `String` | `lieferadresse` | ❌ |
-| `spediteur` | `String` | `spediteur` | ❌ |
-| `versandart` | `String` | `versandart` | ❌ |
-| `entscheidungsart` | `String` | `entscheidungsart` | ❌ |
-| `land` | `String` | `land` | ❌ |
-| `gewicht` | `Long` | `gewicht` | ❌ |
+| `ruleId` | `Integer` | `ruleId` | ✅ |
+| `benutzerId` | `String` | `userId` | ✅ |
+| `grund` | `String` | `reason` | ✅ |
+| `bestellnummer` | `String` | `orderId` | ❌ |
+| `lieferadresse` | `String` | `address` | ❌ |
+| `spediteur` | `String` | `carrier` | ❌ |
+| `versandart` | `String` | `shippingType` | ❌ |
+| `entscheidungsart` | `String` | `decisionType` | ❌ |
+| `land` | `String` | `country` | ❌ |
+| `gewicht` | `Long` | `weight` | ❌ |
+
+> **Hinweis:** `logId` (AUTO_INCREMENT PK) und `created_at` (Timestamp) werden automatisch von der Datenbank gesetzt und sind nicht im DTO enthalten.
 
 ---
 
@@ -185,17 +186,14 @@ Einfaches Data Transfer Object mit Gettern/Settern. Repräsentiert eine Versande
 
 **Datei:** `DatabaseClient/MySQLClient.java`
 
-Enthält zwei Methoden mit **PreparedStatements** (SQL-Injection-sicher):
+Enthält eine Methode mit **PreparedStatement** (SQL-Injection-sicher):
 
 #### `insertDecision(Decision decision)`
-- INSERT mit 10 Platzhaltern (`?`)
-- Nullable Felder (`ruleId`, `benutzerId`, `grund`) werden mit `stmt.setNull()` korrekt als `SQL NULL` gespeichert
-
-#### `findByBestellnummer(String bestellnummer)`
-- SELECT mit `WHERE bestellnummer = ?`
-- Liest `ResultSet` zurück in ein `Decision`-Objekt
-- `rs.wasNull()` prüft ob `rule_id` / `gewicht` in der DB `NULL` sind
-- Gibt `null` zurück wenn kein Eintrag gefunden
+- INSERT in Tabelle `logTable` mit 10 Platzhaltern (`?`)
+- Spalten: `orderId`, `ruleId`, `userId`, `reason`, `address`, `carrier`, `shippingType`, `decisionType`, `country`, `weight`
+- Nullable Feld `ruleId` wird mit `stmt.setNull(2, java.sql.Types.INTEGER)` korrekt als `SQL NULL` gespeichert
+- `benutzerId` und `grund` werden als `String` übergeben – `null` wird automatisch als `SQL NULL` behandelt
+- `logId` und `created_at` werden automatisch von der DB generiert
 
 ---
 
@@ -205,38 +203,56 @@ Enthält zwei Methoden mit **PreparedStatements** (SQL-Injection-sicher):
 
 Stellt die JDBC-Connection bereit und initialisiert die Tabelle.
 
-**Aktuell:** H2 In-Memory (temporär, bis MySQL vom Dozenten freigeschalten wird)
+**Aktuell:** H2 In-Memory
 ```
 jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
 ```
+> `DB_CLOSE_DELAY=-1` sorgt dafür, dass die DB offen bleibt solange die JVM läuft.
 
 **Später (MySQL):** Auskommentierte Zeile aktivieren:
 ```
 jdbc:mysql://127.0.0.1:3306/logging_db
 ```
 
-**`initTable()`:** Erstellt die `decision`-Tabelle automatisch beim Start mit `CREATE TABLE IF NOT EXISTS`.
+**`initTable()`:** Erstellt die Tabelle `logTable` automatisch beim Start mit `CREATE TABLE IF NOT EXISTS`.
 
 ---
 
 ## Datenbank
 
-### Tabelle `decision`
+### Tabelle `logTable`
 
 ```sql
-CREATE TABLE IF NOT EXISTS decision (
-    bestellnummer    VARCHAR(255)  NOT NULL PRIMARY KEY,
-    rule_id          INT           NULL,
-    benutzer_id      VARCHAR(255)  NULL,
-    grund            VARCHAR(255)  NULL,
-    lieferadresse    VARCHAR(255)  NOT NULL,
-    spediteur        VARCHAR(255)  NOT NULL,
-    versandart       VARCHAR(255)  NOT NULL,
-    entscheidungsart VARCHAR(255)  NOT NULL,
-    land             VARCHAR(255)  NOT NULL,
-    gewicht          BIGINT        NOT NULL
+CREATE TABLE IF NOT EXISTS logTable (
+    logId          INT           AUTO_INCREMENT PRIMARY KEY,
+    orderId        VARCHAR(255)  NOT NULL,
+    ruleId         INT           NULL,
+    userId         VARCHAR(255)  NULL,
+    reason         VARCHAR(255)  NULL,
+    address        VARCHAR(255)  NOT NULL,
+    carrier        VARCHAR(255)  NOT NULL,
+    shippingType   VARCHAR(255)  NOT NULL,
+    decisionType   VARCHAR(255)  NOT NULL,
+    country        VARCHAR(255)  NOT NULL,
+    weight         BIGINT        NOT NULL,
+    created_at     TIMESTAMP     DEFAULT CURRENT_TIMESTAMP
 );
 ```
+
+| Spalte | Typ | Beschreibung |
+|---|---|---|
+| `logId` | `INT AUTO_INCREMENT` | **Primary Key** – wird automatisch hochgezählt |
+| `orderId` | `VARCHAR(255) NOT NULL` | Bestellnummer |
+| `ruleId` | `INT NULL` | Regel-ID (kann null sein bei manueller Entscheidung) |
+| `userId` | `VARCHAR(255) NULL` | Benutzer-ID (kann null sein bei automatischer Entscheidung) |
+| `reason` | `VARCHAR(255) NULL` | Begründung / Enum (kann null sein) |
+| `address` | `VARCHAR(255) NOT NULL` | Lieferadresse |
+| `carrier` | `VARCHAR(255) NOT NULL` | Spediteur |
+| `shippingType` | `VARCHAR(255) NOT NULL` | Versandart |
+| `decisionType` | `VARCHAR(255) NOT NULL` | Entscheidungsart |
+| `country` | `VARCHAR(255) NOT NULL` | Zielland |
+| `weight` | `BIGINT NOT NULL` | Gewicht |
+| `created_at` | `TIMESTAMP` | Zeitstempel des Eintrags (automatisch gesetzt) |
 
 ### H2 → MySQL umstellen
 
@@ -267,8 +283,9 @@ Login-Daten:
 | User | `sa` |
 | Password | *(leer)* |
 
+Daten prüfen:
 ```sql
-SELECT * FROM decision;
+SELECT * FROM logTable;
 ```
 
 ---
@@ -278,13 +295,13 @@ SELECT * FROM decision;
 ```
 1. Camunda-Prozess erzeugt External Task "loggingDecision"
        │
-2. LoggingWorker pollt den Task
+2. LoggingWorker pollt den Task (asyncResponseTimeout: 1000ms)
        │
 3. LoggingExternalTaskHandler.execute() wird aufgerufen
        │
 4. Prozessvariablen auslesen (orderId, carrier, weight, ...)
        │
-5. Null-sichere Konvertierung (Objects.toString für Enums)
+5. Null-sichere Konvertierung (Objects.toString für Enums/nullable Felder)
        │
 6. HashMap befüllen und an LoggingService übergeben
        │
@@ -296,9 +313,27 @@ SELECT * FROM decision;
    - PreparedStatement mit 10 Platzhaltern
    - Nullable Felder → setNull()
    - stmt.executeUpdate()
+   - logId + created_at werden automatisch generiert
        │
 9. Bei Erfolg: externalTaskService.complete()
    Bei Fehler: Retry oder Abbruch (Task bleibt offen in Camunda)
+```
+
+---
+
+## Konfiguration
+
+### `application.properties`
+
+```properties
+spring.application.name=SA_Case2_LoggingWorker
+server.port=8082
+
+# H2 In-Memory Datenbank
+spring.datasource.url=jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
+spring.datasource.driverClassName=org.h2.Driver
+spring.datasource.username=sa
+spring.datasource.password=
 ```
 
 ---
@@ -310,8 +345,8 @@ SELECT * FROM decision;
 | Java | 21 | Programmiersprache |
 | Spring Boot | 4.0.3 | Framework (Application-Kontext) |
 | Camunda External Task Client | 1.3.1 | Kommunikation mit Camunda Engine |
-| H2 Database | 2.2.224 | Temporäre In-Memory DB |
-| MySQL Connector | 9.2.0 | JDBC-Treiber (wenn MySQL aktiv) |
+| H2 Database | 2.2.224 | In-Memory DB + Web-Konsole |
+| MySQL Connector | 9.2.0 | JDBC-Treiber (vorbereitet, noch deaktiviert) |
 | Jersey Client | 4.0.2 | JAX-RS HTTP Client |
 | Jackson | – | JSON Serialisierung |
 

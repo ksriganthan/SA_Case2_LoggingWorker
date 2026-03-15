@@ -4,7 +4,6 @@ import com.fhnw.sa_case2_loggingworker.DTO.Decision;
 import com.fhnw.sa_case2_loggingworker.Database.MySQLDatabase;
 
 import java.sql.PreparedStatement;
-import java.sql.ResultSet;
 import java.sql.SQLException;
 
 public class MySQLClient {
@@ -16,7 +15,7 @@ public class MySQLClient {
     }
 
     public void insertDecision(Decision decision) {
-        String sql = "INSERT INTO decision (bestellnummer, rule_id, benutzer_id, grund, lieferadresse, spediteur, versandart, entscheidungsart, land, gewicht) "
+        String sql = "INSERT INTO logTable (orderId, ruleId, userId, reason, address, carrier, shippingType, decisionType, country, weight) "
                    + "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
 
         try (PreparedStatement stmt = database.getConnection().prepareStatement(sql)) {
@@ -36,54 +35,14 @@ public class MySQLClient {
             stmt.setString(7, decision.getVersandart());
             stmt.setString(8, decision.getEntscheidungsart());
             stmt.setString(9, decision.getLand());
+            stmt.setLong(10, decision.getGewicht());
 
-            if (decision.getGewicht() != null) {
-                stmt.setLong(10, decision.getGewicht());
-            } else {
-                stmt.setNull(10, java.sql.Types.BIGINT);
-            }
 
             stmt.executeUpdate();
             System.out.println("Decision erfolgreich in DB gespeichert: " + decision.getBestellnummer());
 
         } catch (SQLException e) {
             throw new RuntimeException("Fehler beim Speichern der Decision in DB", e);
-        }
-    }
-
-    public Decision findByBestellnummer(String bestellnummer) {
-        String sql = "SELECT bestellnummer, rule_id, benutzer_id, grund, lieferadresse, spediteur, versandart, entscheidungsart, land, gewicht "
-                   + "FROM decision WHERE bestellnummer = ?";
-
-        try (PreparedStatement stmt = database.getConnection().prepareStatement(sql)) {
-            stmt.setString(1, bestellnummer);
-
-            try (ResultSet rs = stmt.executeQuery()) {
-                if (rs.next()) {
-                    Decision d = new Decision();
-                    d.setBestellnummer(rs.getString("bestellnummer"));
-
-                    int ruleId = rs.getInt("rule_id");
-                    d.setRuleId(rs.wasNull() ? null : ruleId);
-
-                    d.setBenutzerId(rs.getString("benutzer_id"));
-                    d.setGrund(rs.getString("grund"));
-                    d.setLieferadresse(rs.getString("lieferadresse"));
-                    d.setSpediteur(rs.getString("spediteur"));
-                    d.setVersandart(rs.getString("versandart"));
-                    d.setEntscheidungsart(rs.getString("entscheidungsart"));
-                    d.setLand(rs.getString("land"));
-
-                    long gewicht = rs.getLong("gewicht");
-                    d.setGewicht(rs.wasNull() ? null : gewicht);
-
-                    return d;
-                }
-            }
-            return null;
-
-        } catch (SQLException e) {
-            throw new RuntimeException("Fehler beim Lesen der Decision aus DB", e);
         }
     }
 }

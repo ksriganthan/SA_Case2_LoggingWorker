@@ -28,17 +28,19 @@ public class MySQLDatabase {
 
     private void initTable() {
         String sql = """
-                CREATE TABLE IF NOT EXISTS decision (
-                    bestellnummer    VARCHAR(255)  NOT NULL PRIMARY KEY,
-                    rule_id          INT           NULL,
-                    benutzer_id      VARCHAR(255)  NULL,
-                    grund            VARCHAR(255)  NULL,
-                    lieferadresse    VARCHAR(255)  NOT NULL,
-                    spediteur        VARCHAR(255)  NOT NULL,
-                    versandart       VARCHAR(255)  NOT NULL,
-                    entscheidungsart VARCHAR(255)  NOT NULL,
-                    land             VARCHAR(255)  NOT NULL,
-                    gewicht          BIGINT        NOT NULL
+                CREATE TABLE IF NOT EXISTS logTable (
+                    logId       INT     AUTO_INCREMENT PRIMARY KEY,
+                    orderId    VARCHAR(255)  NOT NULL,
+                    ruleId          INT           NULL,
+                    userId     VARCHAR(255)  NULL,
+                    reason            VARCHAR(255)  NULL,
+                    address    VARCHAR(255)  NOT NULL,
+                    carrier        VARCHAR(255)  NOT NULL,
+                    shippingType       VARCHAR(255)  NOT NULL,
+                    decisionType VARCHAR(255)  NOT NULL,
+                    country             VARCHAR(255)  NOT NULL,
+                    weight          BIGINT        NOT NULL,
+                    created_at      TIMESTAMP       DEFAULT CURRENT_TIMESTAMP
                 )
                 """;
         try (Statement stmt = connection.createStatement()) {
