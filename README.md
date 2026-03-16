@@ -1,6 +1,6 @@
 # SA Case 2 – Logging Worker
 
-Camunda External Task Worker, der Versandentscheidungen aus einem BPMN-Prozess entgegennimmt und in einer H2 In-Memory-Datenbank protokolliert.
+Camunda External Task Worker, der Versandentscheidungen aus einem BPMN-Prozess entgegennimmt und in einer **MySQL-Datenbank** protokolliert.
 
 ---
 
@@ -13,10 +13,9 @@ Camunda Engine (BPMN-Prozess)
         ▼
 ┌──────────────────────────────────────────────────────┐
 │  LoggingWorker (Einstiegspunkt)                      │
-│  - Startet H2 Web-Konsole (Port 8083)                │
-│  - Erstellt Camunda ExternalTaskClient                │
-│  - Subscribt auf Topic "loggingDecision"              │
-│  - Erstellt MySQLClient + LoggingService              │
+│  - Erstellt Camunda ExternalTaskClient               │
+│  - Subscribt auf Topic "loggingDecision"             │
+│  - Erstellt MySQLClient + LoggingService             │
 └──────────────┬───────────────────────────────────────┘
                │
                ▼
@@ -41,15 +40,14 @@ Camunda Engine (BPMN-Prozess)
 │  MySQLClient                                         │
 │  - INSERT via PreparedStatement (SQL-Injection-safe) │
 │  - Null-Handling: setNull() für nullable Felder      │
+│  - Formatierte Konsolenausgabe nach Eintrag          │
 └──────────────┬───────────────────────────────────────┘
                │
                ▼
 ┌──────────────────────────────────────────────────────┐
 │  MySQLDatabase                                       │
-│  - Stellt JDBC-Connection bereit                     │
-│  - Erstellt Tabelle "logTable" automatisch (initTable)│
-│  - Aktuell: H2 In-Memory                            │
-│  - Später: MySQL (wenn DB freigeschalten)            │
+│  - Stellt JDBC-Connection bereit (MySQL)             │
+│  - jdbc:mysql://xxx/db_group6         │
 └──────────────────────────────────────────────────────┘
 ```
 
@@ -73,10 +71,11 @@ src/main/java/com/fhnw/sa_case2_loggingworker/
 │   └── Decision.java                     # Datenmodell für eine Versandentscheidung
 │
 ├── DatabaseClient/
-│   └── MySQLClient.java                  # INSERT mit PreparedStatements
+│   └── MySQLClient.java                  # INSERT mit PreparedStatements + Konsolenausgabe
 │
 └── Database/
-    └── MySQLDatabase.java                # JDBC-Connection + Tabellen-Initialisierung
+    ├── MySQLDatabase.java                # JDBC-Connection zu MySQL (aktiv)
+    └── MySQLDatabaseOriginal.java        # Backup/Original-Version
 ```
 
 ---
@@ -87,16 +86,17 @@ src/main/java/com/fhnw/sa_case2_loggingworker/
 
 **Datei:** `Worker/LoggingWorker.java`
 
-Der Haupt-Einstiegspunkt. Wird über `main()` gestartet und macht drei Dinge:
+Der Haupt-Einstiegspunkt. Wird über `main()` gestartet und macht folgendes:
 
-1. **H2 Web-Konsole starten** auf Port 8083 – damit Einträge im Browser geprüft werden können
-2. **Camunda ExternalTaskClient** erstellen – verbindet sich mit der Camunda Engine (`http://192.168.111.3:8080/engine-rest`)
-3. **Topic subscriben** – hört auf `"loggingDecision"` und leitet eingehende Tasks an den Handler weiter
+1. **Camunda ExternalTaskClient** erstellen – verbindet sich mit der Camunda Engine (`http://192.168.111.3:8080/engine-rest`) mit Basic Auth (`group6`)
+2. **MySQLClient** instanziieren – stellt Verbindung zur MySQL-DB her
+3. **LoggingService** erstellen – erhält den MySQLClient als Dependency
+4. **Topic subscriben** – hört auf `"loggingDecision"` und leitet eingehende Tasks an den Handler weiter
 
 ```
 LoggingWorker.main()
-  ├── H2 Web-Konsole (Port 8083)
-  ├── MySQLClient → MySQLDatabase → DB-Connection + Tabelle "logTable"
+  ├── ExternalTaskClient → Camunda Engine (192.168.111.3:8080)
+  ├── MySQLClient → MySQLDatabase → MySQL-Connection
   ├── LoggingService(MySQLClient)
   └── client.subscribe("loggingDecision") → LoggingExternalTaskHandler
 ```
@@ -122,7 +122,7 @@ Implementiert `ExternalTaskHandler` von Camunda. Wird für jeden eingehenden Tas
 | Exception | Reaktion |
 |---|---|
 | `WebApplicationException` / `ProcessingException` | Retry mit max. 3 Versuchen, 60s Wartezeit |
-| `Exception` (z.B. Datentypfehler) | Log + Abbruch, Task wird **nicht** als complete markiert |
+| `Exception` (z.B. Datentypfehler) | Log + Stacktrace, Task wird **nicht** als complete markiert |
 | Erfolg | `externalTaskService.complete()` |
 
 **Variablen-Mapping (Camunda → HashMap):**
@@ -195,32 +195,52 @@ Enthält eine Methode mit **PreparedStatement** (SQL-Injection-sicher):
 - `benutzerId` und `grund` werden als `String` übergeben – `null` wird automatisch als `SQL NULL` behandelt
 - `logId` und `created_at` werden automatisch von der DB generiert
 
+**Konsolenausgabe nach erfolgreichem INSERT:**
+
+```
+╔══════════════════════════════════════════════════════════╗
+║           Decision erfolgreich gespeichert              ║
+╠══════════════════════════════════════════════════════════╣
+║  Bestellnummer   : B-12345                              ║
+║  Rule-ID         : 7                                    ║
+║  Benutzer-ID     : user42                               ║
+║  Grund           : –                                    ║
+║  Lieferadresse   : Musterstrasse 1                      ║
+║  Spediteur       : DHL                                  ║
+║  Versandart      : Express                              ║
+║  Entscheidungsart: Automatisch                          ║
+║  Land            : CH                                   ║
+║  Gewicht         : 2500 g                               ║
+╚══════════════════════════════════════════════════════════╝
+```
+
+Nullable Felder (`ruleId`, `benutzerId`, `grund`) werden als `–` angezeigt wenn sie `null` sind.
+
 ---
 
 ### 6. `MySQLDatabase` (Connection-Management)
 
 **Datei:** `Database/MySQLDatabase.java`
 
-Stellt die JDBC-Connection bereit und initialisiert die Tabelle.
-
-**Aktuell:** H2 In-Memory
-```
-jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
-```
-> `DB_CLOSE_DELAY=-1` sorgt dafür, dass die DB offen bleibt solange die JVM läuft.
-
-**Später (MySQL):** Auskommentierte Zeile aktivieren:
-```
-jdbc:mysql://127.0.0.1:3306/logging_db
-```
-
-**`initTable()`:** Erstellt die Tabelle `logTable` automatisch beim Start mit `CREATE TABLE IF NOT EXISTS`.
+Stellt die JDBC-Connection zur **MySQL-Datenbank** bereit.
 
 ---
 
 ## Datenbank
 
+### Verbindungsdaten
+
+| Feld | Wert                         |
+|---|------------------------------|
+| Host | `192.168.111.4`              |
+| Port | `3306`                       |
+| Datenbank | `db_group6`                  |
+| User | `group6`                     |
+| JDBC URL | `jdbc:mysql://xxx/db_group6` |
+
 ### Tabelle `logTable`
+
+Die Tabelle muss in MySQL existieren. SQL zum Erstellen:
 
 ```sql
 CREATE TABLE IF NOT EXISTS logTable (
@@ -251,42 +271,27 @@ CREATE TABLE IF NOT EXISTS logTable (
 | `shippingType` | `VARCHAR(255) NOT NULL` | Versandart |
 | `decisionType` | `VARCHAR(255) NOT NULL` | Entscheidungsart |
 | `country` | `VARCHAR(255) NOT NULL` | Zielland |
-| `weight` | `BIGINT NOT NULL` | Gewicht |
+| `weight` | `BIGINT NOT NULL` | Gewicht in Gramm |
 | `created_at` | `TIMESTAMP` | Zeitstempel des Eintrags (automatisch gesetzt) |
 
-### H2 → MySQL umstellen
+### Daten in MySQL Workbench prüfen
 
-Wenn der Dozent die MySQL-DB freischaltet:
-
-1. In `MySQLDatabase.java`: H2-Zeile auskommentieren, MySQL-Zeile aktivieren
-2. In `pom.xml`: H2-Dependency auskommentieren, `mysql-connector-j` aktivieren
-3. In MySQL Workbench: `CREATE DATABASE logging_db;` + obiges CREATE TABLE ausführen
-4. `initTable()` kann entfernt oder beibehalten werden (MySQL unterstützt `IF NOT EXISTS`)
+```sql
+SELECT * FROM logTable;
+```
 
 ---
 
-## Starten & H2-Konsole
+## Starten
 
 ### Worker starten
 
 `LoggingWorker.main()` ausführen (nicht `SaCase2LoggingWorkerApplication`).
 
-### H2 Web-Konsole öffnen
-
-Nach dem Start im Browser öffnen: **http://localhost:8083**
-
-Login-Daten:
-
-| Feld | Wert |
-|---|---|
-| JDBC URL | `jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1` |
-| User | `sa` |
-| Password | *(leer)* |
-
-Daten prüfen:
-```sql
-SELECT * FROM logTable;
-```
+**Voraussetzungen:**
+- MySQL-Datenbank muss erreichbar sein
+- Tabelle `logTable` muss in `db_group6` existieren
+- Camunda Engine auf `192.168.111.3:8080` muss laufen
 
 ---
 
@@ -314,26 +319,10 @@ SELECT * FROM logTable;
    - Nullable Felder → setNull()
    - stmt.executeUpdate()
    - logId + created_at werden automatisch generiert
+   - Formatierte Konsolenausgabe aller Felder
        │
 9. Bei Erfolg: externalTaskService.complete()
    Bei Fehler: Retry oder Abbruch (Task bleibt offen in Camunda)
-```
-
----
-
-## Konfiguration
-
-### `application.properties`
-
-```properties
-spring.application.name=SA_Case2_LoggingWorker
-server.port=8082
-
-# H2 In-Memory Datenbank
-spring.datasource.url=jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1
-spring.datasource.driverClassName=org.h2.Driver
-spring.datasource.username=sa
-spring.datasource.password=
 ```
 
 ---
@@ -345,8 +334,7 @@ spring.datasource.password=
 | Java | 21 | Programmiersprache |
 | Spring Boot | 4.0.3 | Framework (Application-Kontext) |
 | Camunda External Task Client | 1.3.1 | Kommunikation mit Camunda Engine |
-| H2 Database | 2.2.224 | In-Memory DB + Web-Konsole |
-| MySQL Connector | 9.2.0 | JDBC-Treiber (vorbereitet, noch deaktiviert) |
+| MySQL Connector | 9.2.0 | JDBC-Treiber für MySQL |
 | Jersey Client | 4.0.2 | JAX-RS HTTP Client |
 | Jackson | – | JSON Serialisierung |
-
+| H2 Database | 2.2.224 | Backup für lokales Testen (optional) |

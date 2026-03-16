@@ -39,7 +39,21 @@ public class MySQLClient {
 
 
             stmt.executeUpdate();
-            System.out.println("Decision erfolgreich in DB gespeichert: " + decision.getBestellnummer());
+
+            System.out.println("╔══════════════════════════════════════════════════════════╗");
+            System.out.println("║           Decision erfolgreich gespeichert              ║");
+            System.out.println("╠══════════════════════════════════════════════════════════╣");
+            System.out.printf("║  Bestellnummer   : %-37s ║%n", decision.getBestellnummer());
+            System.out.printf("║  Rule-ID         : %-37s ║%n", decision.getRuleId() != null ? decision.getRuleId() : "–");
+            System.out.printf("║  Benutzer-ID     : %-37s ║%n", decision.getBenutzerId() != null ? decision.getBenutzerId() : "–");
+            System.out.printf("║  Grund           : %-37s ║%n", decision.getGrund() != null ? decision.getGrund() : "–");
+            System.out.printf("║  Lieferadresse   : %-37s ║%n", decision.getLieferadresse());
+            System.out.printf("║  Spediteur       : %-37s ║%n", decision.getSpediteur());
+            System.out.printf("║  Versandart      : %-37s ║%n", decision.getVersandart());
+            System.out.printf("║  Entscheidungsart: %-37s ║%n", decision.getEntscheidungsart());
+            System.out.printf("║  Land            : %-37s ║%n", decision.getLand());
+            System.out.printf("║  Gewicht         : %-37s ║%n", decision.getGewicht() + " g");
+            System.out.println("╚══════════════════════════════════════════════════════════╝");
 
         } catch (SQLException e) {
             throw new RuntimeException("Fehler beim Speichern der Decision in DB", e);

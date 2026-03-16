@@ -10,15 +10,6 @@ public class LoggingWorker {
 
     public static void main(String[] args) {
 
-        // H2 Web-Konsole starten (vor DB-Verbindung!)
-        try {
-            Server.createWebServer("-web", "-webAllowOthers", "-webPort", "8083").start();
-            System.out.println("H2 Konsole: http://localhost:8083");
-            System.out.println("JDBC URL:   jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1 | User: sa | PW: (leer)");
-        } catch (Exception e) {
-            System.out.println("H2 Konsole konnte nicht gestartet werden: " + e.getMessage());
-        }
-
         ExternalTaskClient client = ExternalTaskClient.create()
                 .baseUrl("http://group6:p5TuHbjEadLeT6L@192.168.111.3:8080/engine-rest")
                 .asyncResponseTimeout(1000)

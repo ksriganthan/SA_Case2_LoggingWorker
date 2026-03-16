@@ -97,14 +97,12 @@
             <artifactId>jackson-databind</artifactId>
         </dependency>
 
-        <!-- MySQL JDBC Treiber (aktivieren wenn DB freigeschalten) -->
-        <!--
+        <!-- MySQL JDBC Treiber -->
         <dependency>
             <groupId>com.mysql</groupId>
             <artifactId>mysql-connector-j</artifactId>
             <version>9.2.0</version>
         </dependency>
-        -->
 
         <!-- H2 In-Memory Datenbank (temporär bis MySQL freigeschalten) -->
         <dependency>

@@ -23,9 +23,6 @@ public LoggingService loggingService;
     public void execute(ExternalTask externalTask, ExternalTaskService externalTaskService) {
         HashMap<String, Object> variables = new HashMap<>();
 
-        // Was noch fehlt: Timestamp vom DB-Eintrag
-
-        // Könnte Null sein -> Hier ist eine Handling nötig!
         Long ruleID = externalTask.getVariable("ruleId");
         String benutzerId = Objects.toString(externalTask.getVariable("userId"), null);
         String grund = Objects.toString(externalTask.getVariable("reason"), null);  // Enum
@@ -69,12 +66,10 @@ public LoggingService loggingService;
                     remainingRetries,
                     60_000L
             );
-            return; // Nicht complete() aufrufen
         }
         catch(Exception e){
             System.out.println("Fehler bei der Datenvorbereitung: " + e.getMessage());
             e.printStackTrace();
-            return; // Nicht complete() aufrufen
         }
 
     }
